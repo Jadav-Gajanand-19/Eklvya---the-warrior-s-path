@@ -6,6 +6,730 @@
     <title>The Warrior's Path: Daily Tracker</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserSessionPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, query, where, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyD3eMdMJEmtuEIzUoMJ9PQl9jjlAIsCxwM",
+            authDomain: "eklvya---the-warrior.firebaseapp.com",
+            projectId: "eklvya---the-warrior",
+            storageBucket: "eklvya---the-warrior.firebasestorage.app",
+            messagingSenderId: "253113341635",
+            appId: "1:253113341635:web:b6b04f17f8bf5ebfcbf476",
+            measurementId: "G-TD8DP526DC"
+        };
+        
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // Global state variables
+        let userId = null;
+        let allData = {};
+        let userProfile = {};
+        let selectedDate = new Date();
+        let runningChart, todoChart;
+        const daysToFetchForCharts = 56;
+        const bhagavadGitaQuotes = [
+            { text: "कर्मण्येवाधिकारस्ते मा फलेषु कदाचन। मा कर्मफलहेतुर्भूर्मा ते सङ्गोऽस्त्वकर्मणि॥", meaning: "You have a right to perform your prescribed duties, but you are not entitled to the fruits of your actions. Never consider yourself the cause of the results of your activities, nor should you be attached to not performing your duty.", source: "Bhagavad Gita, Chapter 2, Verse 47" },
+            { text: "नैनं छिन्दन्ति शस्त्राणि नैनं दहति पावकः। न चैनं क्लेदयन्त्यापो न शोषयति मारुतः॥", meaning: "The soul cannot be pierced by weapons, nor burned by fire; water cannot wet it, nor can the wind wither it. (A reminder of courage and the eternal self).", source: "Bhagavad Gita, Chapter 2, Verse 23" },
+            { text: "युक्ताहारविहारस्य युक्तचेष्टस्य कर्मसु। युक्तस्वप्नबोधस्य योगो भवati दुःखहा॥", meaning: "Yoga (disciplined practice) is the destroyer of sorrow for one who is moderate in eating and recreation, who is regulated in their actions, and who is balanced in sleep and wakefulness.", source: "Bhagavad Gita, Chapter 6, Verse 17" },
+            { text: "तस्माद्सक्तः सततं कार्यं कर्म समाचर। असक्तो ह्याचरन्कर्म परमाप्नोति पूरुषः॥", meaning: "Therefore, without attachment, constantly perform your duty, for by doing work without attachment, one attains the Supreme.", source: "Bhagavad Gita, Chapter 3, Verse 19" },
+            { text: "यतो धर्मस्ततो जयः।", meaning: "Where there is righteousness, there is victory.", source: "Bhagavad Gita, often quoted as the theme of the Mahabharata" }
+        ];
+
+        const chartColors = {
+            running: '#5A67D8',
+            runningTime: '#F6AD55',
+            completed: '#38A169',
+            todo: '#A0AEC0',
+            todoCompleted: '#4A5568'
+        };
+        
+        // --- UI & CHARTING LOGIC ---
+        function showMessage(message) {
+            const messageBox = document.getElementById('message-box');
+            messageBox.textContent = message;
+            messageBox.classList.remove('hidden');
+            setTimeout(() => messageBox.classList.add('hidden'), 5000);
+        }
+
+        function displayDailyQuote() {
+            const quoteIndex = new Date().getDate() % bhagavadGitaQuotes.length;
+            const quote = bhagavadGitaQuotes[quoteIndex];
+            const quoteEl = document.getElementById('daily-gita-quote');
+            if(quoteEl) {
+                quoteEl.innerHTML = `<p class="text-lg italic text-gray-800 mb-4">"${quote.text}"</p><p class="text-sm text-gray-600">"${quote.meaning}"</p><p class="text-xs text-right text-gray-400 mt-2">— ${quote.source}</p>`;
+            }
+        }
+        
+        function setupCalendar() {
+            const calendarEl = document.getElementById('calendar-days');
+            const dateHeaderEl = document.getElementById('current-date');
+            if (!calendarEl || !dateHeaderEl) return;
+            const today = new Date();
+            const startOfMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
+            const endOfMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0);
+            dateHeaderEl.textContent = selectedDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+            calendarEl.innerHTML = `<div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>`;
+            const firstDayOfWeek = startOfMonth.getDay();
+            const daysInMonth = endOfMonth.getDate();
+            for (let i = 0; i < firstDayOfWeek; i++) {
+                calendarEl.appendChild(document.createElement('div'));
+            }
+            for (let i = 1; i <= daysInMonth; i++) {
+                const dayEl = document.createElement('div');
+                dayEl.textContent = i;
+                dayEl.className = 'day';
+                const currentDay = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), i);
+                if (currentDay > today) {
+                    dayEl.classList.add('disabled');
+                } else {
+                    dayEl.classList.add('cursor-pointer', 'hover:bg-slate-200');
+                    dayEl.addEventListener('click', () => {
+                        selectedDate = currentDay;
+                        setupCalendar();
+                        updateUI();
+                    });
+                }
+                if (currentDay.toDateString() === today.toDateString()) dayEl.classList.add('today');
+                if (currentDay.toDateString() === selectedDate.toDateString()) dayEl.classList.add('selected');
+                calendarEl.appendChild(dayEl);
+            }
+        }
+        
+        function changeMonth(direction) {
+            selectedDate.setMonth(selectedDate.getMonth() + direction);
+            setupCalendar();
+            updateUI();
+        }
+
+        function displayJournal() {
+            const journalDisplaySection = document.getElementById('daily-journal-section');
+            const journalTextEl = document.getElementById('journal-text');
+            const dateStr = selectedDate.toISOString().split('T')[0];
+            const currentData = allData[dateStr] || {};
+            if (currentData.journalEntry) {
+                journalTextEl.textContent = currentData.journalEntry;
+                journalDisplaySection.classList.remove('hidden');
+            } else {
+                journalDisplaySection.classList.add('hidden');
+            }
+        }
+
+        function displayNote() {
+            const noteDisplaySection = document.getElementById('daily-note-section');
+            const noteTextEl = document.getElementById('note-text');
+            const dateStr = selectedDate.toISOString().split('T')[0];
+            const currentData = allData[dateStr] || {};
+            if (currentData.dailyNote) {
+                noteTextEl.textContent = currentData.dailyNote;
+                noteDisplaySection.classList.remove('hidden');
+            } else {
+                noteDisplaySection.classList.add('hidden');
+            }
+        }
+        
+        function updateUI() {
+            const dateStr = selectedDate.toISOString().split('T')[0];
+            const currentData = allData[dateStr] || {};
+            
+            // Update running data list
+            const runningDataListEl = document.getElementById('running-data-list');
+            if (runningDataListEl) {
+                const runList = currentData.runList || [];
+                runningDataListEl.innerHTML = runList.map(run => {
+                    const isCompleted = run.completed || false;
+                    return `
+                        <li class="flex items-center justify-between space-x-2 p-2 bg-white rounded-lg shadow-sm">
+                            <div class="flex items-center space-x-2">
+                                <input type="checkbox" id="run-task-${run.id}" class="form-checkbox h-5 w-5 text-green-600 rounded" ${isCompleted ? 'checked' : ''} onchange="updateRunStatus('${run.id}', this.checked)">
+                                <label for="run-task-${run.id}" class="${isCompleted ? 'line-through text-gray-500' : 'text-gray-800'}">Distance: ${run.distance} km, Time: ${run.time} min</label>
+                            </div>
+                            <button onclick="deleteRunData('${run.id}')" class="p-1 rounded-full text-red-500 hover:bg-red-100 transition">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
+                                </svg>
+                            </button>
+                        </li>
+                    `;
+                }).join('');
+            }
+            
+            // Update physical tasks list
+            const physicalTaskListEl = document.getElementById('physical-task-list');
+            if (physicalTaskListEl) {
+                const physicalTasks = currentData.physicalTasks || [];
+                physicalTaskListEl.innerHTML = physicalTasks.map((task) => {
+                    const isCompleted = task.completed || false;
+                    return `
+                        <li class="flex items-center justify-between space-x-2">
+                            <div class="flex items-center space-x-2">
+                                <input type="checkbox" id="physical-task-${task.id}" class="form-checkbox h-5 w-5 text-green-600 rounded" ${isCompleted ? 'checked' : ''} onchange="updatePhysicalTaskStatus('${task.id}', this.checked)">
+                                <label for="physical-task-${task.id}" class="${isCompleted ? 'line-through text-gray-500' : 'text-gray-800'}">${task.text}</label>
+                            </div>
+                            <button onclick="deletePhysicalTask('${task.id}')" class="p-1 rounded-full text-red-500 hover:bg-red-100 transition">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
+                                </svg>
+                            </button>
+                        </li>
+                    `;
+                }).join('');
+            }
+            
+            // Update to-do list
+            const todayTodoEl = document.getElementById('today-todo-list');
+            if (todayTodoEl) {
+                const todoList = currentData.todoList || [];
+                todayTodoEl.innerHTML = todoList.map((todo) => {
+                    const isCompleted = todo.completed || false;
+                    return `
+                        <li class="flex items-center justify-between space-x-2">
+                            <div class="flex items-center space-x-2">
+                                <input type="checkbox" id="todo-task-${todo.id}" class="form-checkbox h-5 w-5 text-green-600 rounded" ${isCompleted ? 'checked' : ''} onchange="updateTodoStatus('${todo.id}', this.checked)">
+                                <label for="todo-task-${todo.id}" class="${isCompleted ? 'line-through text-gray-500' : 'text-gray-800'}">${todo.text}</label>
+                            </div>
+                            <button onclick="deleteTodoItem('${todo.id}')" class="p-1 rounded-full text-red-500 hover:bg-red-100 transition">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
+                                </svg>
+                            </button>
+                        </li>
+                    `;
+                }).join('');
+            }
+            
+            displayJournal();
+            displayNote(); // Call displayNote here
+        }
+        
+        function updateUserProfileUI() {
+            const goalDisplayContainer = document.getElementById('goal-display-container');
+            const goalInputContainer = document.getElementById('goal-input-container');
+            const goalActions = document.getElementById('goal-actions');
+
+            if (userProfile.goal) {
+                goalDisplayContainer.classList.remove('hidden');
+                goalInputContainer.classList.add('hidden');
+                goalActions.classList.remove('hidden');
+            } else {
+                goalDisplayContainer.classList.add('hidden');
+                goalInputContainer.classList.remove('hidden');
+                goalActions.classList.add('hidden');
+            }
+
+            const goalDisplayEl = document.getElementById('goal-display');
+            const deadlineDisplayEl = document.getElementById('goal-deadline-display');
+            const streakCounterEl = document.getElementById('streak-counter');
+            
+            if (goalDisplayEl) {
+                goalDisplayEl.textContent = userProfile.goal || "No long-term goal set yet.";
+            }
+            if (deadlineDisplayEl) {
+                deadlineDisplayEl.textContent = userProfile.deadline ? `(Deadline: ${new Date(userProfile.deadline).toDateString()})` : '';
+            }
+            if (streakCounterEl) {
+                streakCounterEl.textContent = `${userProfile.currentStreak || 0} days`;
+            }
+        }
+
+        function updateCharts() {
+            if (Object.keys(allData).length === 0) {
+                if (runningChart) runningChart.destroy();
+                if (todoChart) todoChart.destroy();
+                runningChart = null;
+                todoChart = null;
+                return;
+            }
+            const today = new Date();
+            const dateFrom = new Date(today.getTime() - (daysToFetchForCharts * 24 * 60 * 60 * 1000));
+
+            const runningTotals = {};
+            const runningTimeTotals = {};
+            const totalTodoTotals = {};
+            const completedTodoTotals = {};
+            
+            Object.keys(allData).forEach(dateStr => {
+                const docDate = new Date(dateStr);
+                if (docDate >= dateFrom) {
+                    const week = Math.floor((docDate.getTime() - dateFrom.getTime()) / (7 * 24 * 60 * 60 * 1000));
+                    const weekKey = `Week ${week + 1}`;
+                    const dailyData = allData[dateStr];
+
+                    if (!runningTotals[weekKey]) runningTotals[weekKey] = 0;
+                    if (!runningTimeTotals[weekKey]) runningTimeTotals[weekKey] = 0;
+                    if (!totalTodoTotals[weekKey]) totalTodoTotals[weekKey] = 0;
+                    if (!completedTodoTotals[weekKey]) completedTodoTotals[weekKey] = 0;
+
+                    const runList = dailyData.runList || [];
+                    runList.forEach(run => {
+                        if (run.completed) {
+                            runningTotals[weekKey] += run.distance;
+                            runningTimeTotals[weekKey] += run.time;
+                        }
+                    });
+                    
+                    const todoList = dailyData.todoList || [];
+                    totalTodoTotals[weekKey] += todoList.length;
+                    const completedTodos = todoList.filter(todo => todo.completed).length;
+                    completedTodoTotals[weekKey] += completedTodos;
+                }
+            });
+
+            const weeks = Array.from({ length: daysToFetchForCharts / 7 }, (_, i) => `Week ${i + 1}`);
+            const runningData = weeks.map(week => runningTotals[week] || 0);
+            const runningTimeData = weeks.map(week => runningTimeTotals[week] || 0);
+            const totalTodoData = weeks.map(week => totalTodoTotals[week] || 0);
+            const completedTodoData = weeks.map(week => completedTodoTotals[week] || 0);
+
+            const runningChartEl = document.getElementById('runningChart');
+            if (runningChart) runningChart.destroy();
+            if (runningChartEl) {
+                runningChart = new Chart(runningChartEl.getContext('2d'), {
+                    type: 'line',
+                    data: {
+                        labels: weeks,
+                        datasets: [
+                            {
+                                label: 'Total Distance (km)',
+                                data: runningData,
+                                borderColor: chartColors.running,
+                                backgroundColor: 'rgba(90, 103, 216, 0.2)',
+                                fill: false, tension: 0.4
+                            },
+                            {
+                                label: 'Total Time (min)',
+                                data: runningTimeData,
+                                borderColor: chartColors.runningTime,
+                                backgroundColor: 'rgba(246, 173, 85, 0.2)',
+                                fill: false, tension: 0.4,
+                                yAxisID: 'y1'
+                            }
+                        ]
+                    },
+                    options: { 
+                        responsive: true, 
+                        maintainAspectRatio: false, 
+                        interaction: { mode: 'index', intersect: false },
+                        scales: { 
+                            y: { 
+                                beginAtZero: true, 
+                                title: { display: true, text: 'Distance (km)' },
+                                position: 'left'
+                            },
+                            y1: {
+                                beginAtZero: true,
+                                title: { display: true, text: 'Time (min)' },
+                                position: 'right',
+                                grid: { drawOnChartArea: false }
+                            }
+                        } 
+                    } 
+                });
+            }
+
+            const todoChartEl = document.getElementById('todoChart');
+            if (todoChart) todoChart.destroy();
+            if (todoChartEl) {
+                todoChart = new Chart(todoChartEl.getContext('2d'), {
+                    type: 'bar',
+                    data: {
+                        labels: weeks,
+                        datasets: [{
+                            label: 'Total To-Do Tasks',
+                            data: totalTodoData,
+                            backgroundColor: chartColors.todo
+                        },
+                        {
+                            label: 'Completed To-Do Tasks',
+                            data: completedTodoData,
+                            backgroundColor: chartColors.todoCompleted
+                        }]
+                    },
+                    options: { 
+                        responsive: true, 
+                        maintainAspectRatio: false, 
+                        scales: { 
+                            x: { stacked: true },
+                            y: { 
+                                stacked: true, 
+                                beginAtZero: true, 
+                                title: { display: true, text: 'Tasks' } 
+                            } 
+                        } 
+                    } 
+                });
+            }
+        }
+        
+        // --- AUTHENTICATION FUNCTIONS ---
+        async function handleLogin() {
+            const email = document.getElementById('auth-email').value;
+            const password = document.getElementById('auth-password').value;
+            const rememberMe = document.getElementById('remember-me').checked;
+
+            try {
+                await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
+                await signInWithEmailAndPassword(auth, email, password);
+                showMessage("Login successful!");
+            } catch (error) {
+                showMessage(`Login failed: ${error.message}`);
+            }
+        }
+
+        async function handleSignup() {
+            const email = document.getElementById('auth-email').value;
+            const password = document.getElementById('auth-password').value;
+            try {
+                await createUserWithEmailAndPassword(auth, email, password);
+                showMessage("Signup successful! You are now logged in.");
+            } catch (error) {
+                showMessage(`Signup failed: ${error.message}`);
+            }
+        }
+
+        function handleLogout() {
+            signOut(auth);
+            showMessage("Logged out successfully!");
+        }
+
+        // --- DATA PERSISTENCE FUNCTIONS (FIRESTORE) ---
+        function listenForData() {
+            if (!userId) return;
+
+            // Listen for user profile data
+            const userProfileRef = doc(db, "users", userId, "profile", "userProfile");
+            onSnapshot(userProfileRef, (docSnap) => {
+                userProfile = docSnap.exists() ? docSnap.data() : { goal: null, deadline: null, currentStreak: 0, lastCompletionDate: null };
+                updateUserProfileUI();
+            });
+
+            // Listen for all daily data
+            const allDailyDataRef = collection(db, "users", userId, "dailyData");
+            onSnapshot(allDailyDataRef, (querySnapshot) => {
+                allData = {};
+                querySnapshot.forEach((doc) => {
+                    allData[doc.id] = doc.data();
+                });
+                updateUI();
+                updateCharts();
+            });
+        }
+        
+        async function saveData(dateStr, updates) {
+            if (!userId) {
+                showMessage("You must be logged in to save data.");
+                return;
+            }
+            try {
+                const docRef = doc(db, "users", userId, "dailyData", dateStr);
+                await setDoc(docRef, updates, { merge: true });
+            } catch (e) {
+                console.error("Error saving daily data: ", e);
+                showMessage("Failed to save data. Please try again.");
+            }
+        }
+        
+        async function setLongTermGoal() {
+            if (!userId) {
+                showMessage("You must be logged in to set a goal.");
+                return;
+            }
+            const goalInput = document.getElementById('goal-input');
+            const deadlineInput = document.getElementById('goal-deadline-input');
+            const goalText = goalInput?.value?.trim();
+            const goalDeadline = deadlineInput?.value;
+
+            if (!goalText) return;
+
+            try {
+                const docRef = doc(db, "users", userId, "profile", "userProfile");
+                await setDoc(docRef, { goal: goalText, deadline: goalDeadline }, { merge: true });
+            } catch (e) {
+                console.error("Error setting goal: ", e);
+                showMessage("Failed to set goal. Please try again.");
+            }
+        }
+
+        async function deleteGoal() {
+            if (!userId) return;
+            const modal = document.getElementById('delete-goal-modal');
+            modal.classList.remove('hidden');
+        }
+
+        async function confirmDeleteGoal(isConfirmed) {
+            const modal = document.getElementById('delete-goal-modal');
+            modal.classList.add('hidden');
+
+            if (isConfirmed && userId) {
+                try {
+                    const docRef = doc(db, "users", userId, "profile", "userProfile");
+                    await setDoc(docRef, { goal: null, deadline: null }, { merge: true });
+                } catch (e) {
+                    console.error("Error deleting goal: ", e);
+                    showMessage("Failed to delete goal. Please try again.");
+                }
+            }
+        }
+
+        async function addManualRun() {
+            if (!userId) return;
+            const runDistanceInput = document.getElementById('manual-run-input');
+            const runTimeInput = document.getElementById('manual-time-input');
+            const distance = parseFloat(runDistanceInput?.value);
+            const time = parseInt(runTimeInput?.value);
+
+            if (isNaN(distance) || isNaN(time) || distance <= 0 || time <= 0) {
+                showMessage("Please enter valid distance and time values.");
+                return;
+            }
+
+            const dateStr = selectedDate.toISOString().split('T')[0];
+            const currentData = allData[dateStr] || {};
+            const runList = currentData.runList || [];
+            
+            runList.push({ id: Date.now(), distance, time, completed: false });
+            await saveData(dateStr, { runList });
+            runDistanceInput.value = '';
+            runTimeInput.value = '';
+        }
+
+        async function updateRunStatus(runId, isCompleted) {
+            if (!userId) return;
+            const dateStr = selectedDate.toISOString().split('T')[0];
+            const currentData = allData[dateStr] || {};
+            const runList = currentData.runList || [];
+            const runIndex = runList.findIndex(run => run.id == runId);
+            if (runIndex > -1) {
+                runList[runIndex].completed = isCompleted;
+                await saveData(dateStr, { runList });
+            }
+        }
+
+        async function deleteRunData(runId) {
+            if (!userId) return;
+            const dateStr = selectedDate.toISOString().split('T')[0];
+            const currentData = allData[dateStr] || {};
+            let runList = currentData.runList || [];
+            runList = runList.filter(run => run.id != runId);
+            await saveData(dateStr, { runList });
+        }
+        
+        async function addPhysicalTask() {
+            if (!userId) return;
+            const physicalTaskInput = document.getElementById('new-physical-task-input');
+            const physicalTaskText = physicalTaskInput?.value?.trim();
+            if (!physicalTaskText) return;
+
+            const dateStr = selectedDate.toISOString().split('T')[0];
+            const currentData = allData[dateStr] || {};
+            const physicalTasks = currentData.physicalTasks || [];
+            
+            physicalTasks.push({ id: Date.now(), text: physicalTaskText, completed: false });
+            await saveData(dateStr, { physicalTasks });
+            if (physicalTaskInput) physicalTaskInput.value = '';
+        }
+
+        async function updatePhysicalTaskStatus(taskId, isCompleted) {
+            if (!userId) return;
+            const dateStr = selectedDate.toISOString().split('T')[0];
+            const currentData = allData[dateStr] || {};
+            const physicalTasks = currentData.physicalTasks || [];
+            const taskIndex = physicalTasks.findIndex(task => task.id == taskId);
+            if (taskIndex > -1) {
+                physicalTasks[taskIndex].completed = isCompleted;
+                await saveData(dateStr, { physicalTasks });
+            }
+        }
+
+        async function deletePhysicalTask(taskId) {
+            if (!userId) return;
+            const dateStr = selectedDate.toISOString().split('T')[0];
+            const currentData = allData[dateStr] || {};
+            let physicalTasks = currentData.physicalTasks || [];
+            physicalTasks = physicalTasks.filter(task => task.id != taskId);
+            await saveData(dateStr, { physicalTasks });
+        }
+        
+        async function updateTodoStatus(todoId, isCompleted) {
+            if (!userId) return;
+            const dateStr = selectedDate.toISOString().split('T')[0];
+            const currentData = allData[dateStr] || {};
+            const todoList = currentData.todoList || [];
+            const todoIndex = todoList.findIndex(todo => todo.id == todoId);
+            if (todoIndex > -1) {
+                todoList[todoIndex].completed = isCompleted;
+                await saveData(dateStr, { todoList });
+            }
+        }
+
+        async function addTodoItem() {
+            if (!userId) return;
+            const todoInput = document.getElementById('new-todo-input');
+            const todoText = todoInput?.value?.trim();
+            if (!todoText) return;
+
+            const dateStr = selectedDate.toISOString().split('T')[0];
+            const currentData = allData[dateStr] || {};
+            const todoList = currentData.todoList || [];
+            
+            todoList.push({ id: Date.now(), text: todoText, completed: false });
+            await saveData(dateStr, { todoList });
+            if (todoInput) todoInput.value = '';
+        }
+
+        async function deleteTodoItem(todoId) {
+            if (!userId) return;
+            const dateStr = selectedDate.toISOString().split('T')[0];
+            const currentData = allData[dateStr] || {};
+            let todoList = currentData.todoList || [];
+            todoList = todoList.filter(todo => todo.id != todoId);
+            await saveData(dateStr, { todoList });
+        }
+
+        function showJournalModal() {
+            const modal = document.getElementById('journal-modal');
+            const journalTextarea = document.getElementById('journal-entry-textarea');
+            const journalDateTitle = document.getElementById('journal-date-title');
+            
+            const dateStr = selectedDate.toISOString().split('T')[0];
+            const currentData = allData[dateStr] || {};
+            journalTextarea.value = currentData.journalEntry || '';
+            journalDateTitle.textContent = `Journal Entry for ${selectedDate.toDateString()}`;
+            modal.classList.remove('hidden');
+        }
+        
+        function editJournal() {
+            showJournalModal();
+        }
+
+        function closeJournalModal() {
+            document.getElementById('journal-modal').classList.add('hidden');
+        }
+
+        async function saveJournal() {
+            if (!userId) return;
+            const dateStr = selectedDate.toISOString().split('T')[0];
+            const journalEntry = document.getElementById('journal-entry-textarea').value;
+            await saveData(dateStr, { journalEntry });
+            closeJournalModal();
+        }
+        
+        function deleteJournal() {
+            if (!userId) return;
+            document.getElementById('delete-journal-modal').classList.remove('hidden');
+        }
+        
+        async function confirmDeleteJournal(isConfirmed) {
+            const modal = document.getElementById('delete-journal-modal');
+            modal.classList.add('hidden');
+            if (isConfirmed && userId) {
+                const dateStr = selectedDate.toISOString().split('T')[0];
+                await saveData(dateStr, { journalEntry: null });
+            }
+        }
+
+        function showNotesModal() {
+            const modal = document.getElementById('notes-modal');
+            const notesTextarea = document.getElementById('notes-entry-textarea');
+            const notesDateTitle = document.getElementById('notes-date-title');
+            
+            const dateStr = selectedDate.toISOString().split('T')[0];
+            const currentData = allData[dateStr] || {};
+            notesTextarea.value = currentData.dailyNote || '';
+            notesDateTitle.textContent = `Notes for ${selectedDate.toDateString()}`;
+            modal.classList.remove('hidden');
+        }
+        
+        function editNote() {
+            showNotesModal();
+        }
+
+        function closeNotesModal() {
+            document.getElementById('notes-modal').classList.add('hidden');
+        }
+
+        async function saveNote() {
+            if (!userId) return;
+            const dateStr = selectedDate.toISOString().split('T')[0];
+            const dailyNote = document.getElementById('notes-entry-textarea').value;
+            await saveData(dateStr, { dailyNote });
+            closeNotesModal();
+        }
+        
+        function deleteNote() {
+            if (!userId) return;
+            document.getElementById('delete-note-modal').classList.remove('hidden');
+        }
+        
+        async function confirmDeleteNote(isConfirmed) {
+            const modal = document.getElementById('delete-note-modal');
+            modal.classList.add('hidden');
+            if (isConfirmed && userId) {
+                const dateStr = selectedDate.toISOString().split('T')[0];
+                await saveData(dateStr, { dailyNote: null });
+            }
+        }
+
+        // Main app initialization
+        function initApp() {
+            onAuthStateChanged(auth, (user) => {
+                const loginContainer = document.getElementById('login-container');
+                const mainAppContainer = document.getElementById('main-app-container');
+                if (user) {
+                    userId = user.uid;
+                    loginContainer.classList.add('hidden');
+                    mainAppContainer.classList.remove('hidden');
+                    document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
+                    listenForData();
+                } else {
+                    userId = null;
+                    loginContainer.classList.remove('hidden');
+                    mainAppContainer.classList.add('hidden');
+                }
+            });
+            displayDailyQuote();
+            setupCalendar();
+            
+            // Expose functions to the global scope for event handlers
+            window.handleLogin = handleLogin;
+            window.handleSignup = handleSignup;
+            window.handleLogout = handleLogout;
+            window.setLongTermGoal = setLongTermGoal;
+            window.deleteGoal = deleteGoal;
+            window.confirmDeleteGoal = confirmDeleteGoal;
+            window.addManualRun = addManualRun;
+            window.updateRunStatus = updateRunStatus;
+            window.deleteRunData = deleteRunData;
+            window.addPhysicalTask = addPhysicalTask;
+            window.updatePhysicalTaskStatus = updatePhysicalTaskStatus;
+            window.deletePhysicalTask = deletePhysicalTask;
+            window.addTodoItem = addTodoItem;
+            window.updateTodoStatus = updateTodoStatus;
+            window.deleteTodoItem = deleteTodoItem;
+            window.showJournalModal = showJournalModal;
+            window.editJournal = editJournal;
+            window.closeJournalModal = closeJournalModal;
+            window.saveJournal = saveJournal;
+            window.deleteJournal = deleteJournal;
+            window.confirmDeleteJournal = confirmDeleteJournal;
+            window.showNotesModal = showNotesModal; // New
+            window.editNote = editNote;             // New
+            window.closeNotesModal = closeNotesModal; // New
+            window.saveNote = saveNote;             // New
+            window.deleteNote = deleteNote;         // New
+            window.confirmDeleteNote = confirmDeleteNote; // New
+            window.changeMonth = changeMonth;
+        }
+
+        document.addEventListener('DOMContentLoaded', initApp);
+    </script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
         body {
@@ -22,7 +746,6 @@
                 height: 350px;
             }
         }
-        /* Custom checkbox styling */
         .form-checkbox {
             appearance: none;
             width: 1.25rem;
@@ -48,8 +771,7 @@
             left: 50%;
             transform: translate(-50%, -50%);
         }
-        /* Modal styling */
-        .shloka-popup, .confirmation-modal {
+        .shloka-popup, .confirmation-modal, .journal-modal, .notes-modal { /* Added .notes-modal */
             position: fixed;
             top: 0;
             left: 0;
@@ -61,7 +783,6 @@
             align-items: center;
             z-index: 100;
         }
-        /* Calendar day styling */
         .day {
             padding: 0.5rem;
             text-align: center;
@@ -89,11 +810,39 @@
     </style>
 </head>
 <body class="text-gray-800">
-    <!-- Main Content -->
-    <div id="main-content" class="min-h-screen p-4 md:p-8 bg-gray-100">
-        <header class="text-center mb-8">
-            <h1 class="text-4xl md:text-5xl font-bold text-slate-800">The Warrior's Path</h1>
-            <p class="text-lg text-slate-600 mt-2">Daily Discipline. Long-Term Glory.</p>
+    <div id="message-box" class="fixed top-4 left-1/2 -translate-x-1/2 p-4 bg-green-500 text-white rounded-lg shadow-xl hidden z-[101]"></div>
+
+    <!-- Login/Signup Container -->
+    <div id="login-container" class="min-h-screen flex items-center justify-center bg-gray-100 p-4">
+        <div class="w-full max-w-md bg-white p-8 rounded-lg shadow-md">
+            <h1 class="text-3xl font-bold text-center text-slate-800 mb-6">The Warrior's Path</h1>
+            <p class="text-center text-slate-600 mb-8">Login or sign up to begin your journey.</p>
+            
+            <div class="space-y-4 mb-6">
+                <input id="auth-email" type="email" placeholder="Email" class="w-full p-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                <input id="auth-password" type="password" placeholder="Password" class="w-full p-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                <div class="flex items-center">
+                    <input type="checkbox" id="remember-me" class="form-checkbox h-4 w-4 text-blue-600 rounded">
+                    <label for="remember-me" class="ml-2 text-gray-700 text-sm">Remember Me</label>
+                </div>
+            </div>
+
+            <div class="flex flex-col space-y-4">
+                <button onclick="handleLogin()" class="w-full bg-blue-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-blue-700 transition">Log In</button>
+                <div class="text-center text-gray-500">or</div>
+                <button onclick="handleSignup()" class="w-full bg-green-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-green-700 transition">Sign Up</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Application Container -->
+    <div id="main-app-container" class="min-h-screen p-4 md:p-8 bg-gray-100 hidden">
+        <header class="flex justify-between items-center mb-8">
+            <div class="text-left">
+                <h1 class="text-3xl md:text-5xl font-bold text-slate-800">The Warrior's Path</h1>
+                <p class="text-lg text-slate-600 mt-2">Daily Discipline. Long-Term Glory.</p>
+            </div>
+            <button onclick="handleLogout()" class="bg-red-500 text-white font-bold py-2 px-4 rounded-lg hover:bg-red-600 transition">Log Out</button>
         </header>
 
         <main class="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -233,6 +982,29 @@
             <p id="journal-text" class="text-lg text-gray-800"></p>
         </section>
 
+        <!-- Daily Notes Section -->
+        <section id="daily-note-section" class="mt-8 bg-white p-6 rounded-lg shadow-md hidden">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-bold text-slate-700">Today's Notes</h2>
+                <div class="flex space-x-2">
+                    <button onclick="editNote()" class="p-2 rounded-full text-blue-500 hover:bg-blue-100 transition">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>
+                            <path d="M15 5l4 4"/>
+                        </svg>
+                    </button>
+                    <button onclick="deleteNote()" class="p-2 rounded-full text-red-500 hover:bg-red-100 transition">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M3 6h18"/>
+                            <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
+                            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <p id="note-text" class="text-lg text-gray-800"></p>
+        </section>
+
         <!-- Daily Inspiration Section -->
         <section class="mt-8">
             <h2 class="text-2xl font-bold text-center text-slate-700 mb-4">Daily Inspiration</h2>
@@ -249,40 +1021,25 @@
                 </div>
             </div>
         </section>
-
     </div>
 
-    <!-- Journal Icon -->
-    <button onclick="showJournalModal()" class="fixed bottom-4 right-4 bg-indigo-600 text-white p-4 rounded-full shadow-lg hover:bg-indigo-700 transition">
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
-            <path d="M6.5 2H20v20h-4v-6.5A2.5 2.5 0 0 1 17.5 13H20L15 2 2 13h3.5l-2.5 6.5z"/>
-        </svg>
-    </button>
-
-    <!-- Journal Modal -->
-    <div id="journal-modal" class="confirmation-modal hidden">
-        <div class="bg-white p-8 rounded-lg shadow-2xl max-w-2xl w-full text-center">
-            <h3 id="journal-date-title" class="text-2xl font-bold text-slate-800 mb-4">Journal Entry for Today</h3>
-            <textarea id="journal-entry-textarea" class="w-full h-64 p-4 mb-4 rounded-lg border border-gray-300 focus:ring-2 focus:ring-green-500 focus:border-green-500" placeholder="Write about your day..."></textarea>
-            <div class="flex justify-center space-x-4">
-                <button onclick="saveJournal()" class="bg-green-600 text-white font-bold py-2 px-6 rounded-lg hover:bg-green-700 transition">Save Journal</button>
-                <button onclick="closeJournalModal()" class="bg-gray-400 text-white font-bold py-2 px-6 rounded-lg hover:bg-gray-500 transition">Close</button>
-            </div>
-        </div>
+    <!-- Floating Action Buttons -->
+    <div class="fixed bottom-4 right-4 flex flex-col space-y-2">
+        <button onclick="showNotesModal()" class="bg-purple-600 text-white p-4 rounded-full shadow-lg hover:bg-purple-700 transition">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <path d="M14 2v6h6M10 13H7M17 13h-3M17 17H7"></path>
+            </svg>
+        </button>
+        <button onclick="showJournalModal()" class="bg-indigo-600 text-white p-4 rounded-full shadow-lg hover:bg-indigo-700 transition">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                <path d="M6.5 2H20v20h-4v-6.5A2.5 2.5 0 0 1 17.5 13H20L15 2 2 13h3.5l-2.5 6.5z"/>
+            </svg>
+        </button>
     </div>
 
-    <!-- Shloka Pop-up Modal -->
-    <div id="shloka-popup" class="shloka-popup hidden">
-        <div class="bg-white p-8 rounded-lg shadow-2xl max-w-lg text-center">
-            <h3 class="text-xl font-bold text-slate-800 mb-4">Daily Wisdom</h3>
-            <p id="shloka-text" class="text-xl font-medium text-indigo-700 italic mb-4"></p>
-            <p id="shloka-meaning" class="text-gray-700 mb-4"></p>
-            <p id="shloka-source" class="text-sm text-gray-500 mb-6"></p>
-            <button onclick="closeShlokaPopup()" class="bg-indigo-600 text-white font-bold py-2 px-6 rounded-lg hover:bg-indigo-700 transition">Close</button>
-        </div>
-    </div>
-    
+    <!-- Modals -->
     <!-- Confirmation Modal for Deleting Goal -->
     <div id="delete-goal-modal" class="confirmation-modal hidden">
         <div class="bg-white p-8 rounded-lg shadow-2xl max-w-sm text-center">
@@ -306,843 +1063,52 @@
             </div>
         </div>
     </div>
+
+    <!-- Confirmation Modal for Deleting Note -->
+    <div id="delete-note-modal" class="confirmation-modal hidden">
+        <div class="bg-white p-8 rounded-lg shadow-2xl max-w-sm text-center">
+            <h3 class="text-xl font-bold text-slate-800 mb-4">Confirm Deletion</h3>
+            <p class="text-gray-700 mb-6">Are you sure you want to delete this note? This cannot be undone.</p>
+            <div class="flex justify-center space-x-4">
+                <button onclick="confirmDeleteNote(true)" class="bg-red-600 text-white font-bold py-2 px-6 rounded-lg hover:bg-red-700 transition">Yes, Delete</button>
+                <button onclick="confirmDeleteNote(false)" class="bg-gray-400 text-white font-bold py-2 px-6 rounded-lg hover:bg-gray-500 transition">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Journal Modal -->
+    <div id="journal-modal" class="confirmation-modal hidden">
+        <div class="bg-white p-8 rounded-lg shadow-2xl max-w-2xl w-full text-center">
+            <h3 id="journal-date-title" class="text-2xl font-bold text-slate-800 mb-4">Journal Entry for Today</h3>
+            <textarea id="journal-entry-textarea" class="w-full h-64 p-4 mb-4 rounded-lg border border-gray-300 focus:ring-2 focus:ring-green-500 focus:border-green-500" placeholder="Write about your day..."></textarea>
+            <div class="flex justify-center space-x-4">
+                <button onclick="saveJournal()" class="bg-green-600 text-white font-bold py-2 px-6 rounded-lg hover:bg-green-700 transition">Save Journal</button>
+                <button onclick="closeJournalModal()" class="bg-gray-400 text-white font-bold py-2 px-6 rounded-lg hover:bg-gray-500 transition">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notes Modal -->
+    <div id="notes-modal" class="notes-modal hidden">
+        <div class="bg-white p-8 rounded-lg shadow-2xl max-w-2xl w-full text-center">
+            <h3 id="notes-date-title" class="text-2xl font-bold text-slate-800 mb-4">Notes for Today</h3>
+            <textarea id="notes-entry-textarea" class="w-full h-64 p-4 mb-4 rounded-lg border border-gray-300 focus:ring-2 focus:ring-purple-500 focus:border-purple-500" placeholder="Write your notes here..."></textarea>
+            <div class="flex justify-center space-x-4">
+                <button onclick="saveNote()" class="bg-purple-600 text-white font-bold py-2 px-6 rounded-lg hover:bg-purple-700 transition">Save Note</button>
+                <button onclick="closeNotesModal()" class="bg-gray-400 text-white font-bold py-2 px-6 rounded-lg hover:bg-gray-500 transition">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Shloka Pop-up Modal -->
+    <div id="shloka-popup" class="shloka-popup hidden">
+        <div class="bg-white p-8 rounded-lg shadow-2xl max-w-lg text-center">
+            <h3 class="text-xl font-bold text-slate-800 mb-4">Daily Wisdom</h3>
+            <p id="shloka-text" class="text-xl font-medium text-indigo-700 italic mb-4"></p>
+            <p id="shloka-meaning" class="text-gray-700 mb-4"></p>
+            <p id="shloka-source" class="text-sm text-gray-500 mb-6"></p>
+            <button onclick="closeShlokaPopup()" class="bg-indigo-600 text-white font-bold py-2 px-6 rounded-lg hover:bg-indigo-700 transition">Close</button>
+        </div>
+    </div>
 </body>
-<script>
-    // Global data objects passed from the Flask backend
-    let allData = JSON.parse('{{ all_data | tojson | default("{}", true) | safe }}');
-    const userProfile = JSON.parse('{{ user_profile | tojson | default("{}", true) | safe }}');
-
-    let selectedDate = new Date();
-    let runningChart, todoChart;
-    const daysToFetchForCharts = 56;
-
-    const bhagavadGitaQuotes = [
-        {
-            text: "कर्मण्येवाधिकारस्ते मा फलेषु कदाचन। मा कर्मफलहेतुर्भूर्मा ते सङ्गोऽस्त्वकर्मणि॥",
-            meaning: "You have a right to perform your prescribed duties, but you are not entitled to the fruits of your actions. Never consider yourself the cause of the results of your activities, nor should you be attached to not performing your duty.",
-            source: "Bhagavad Gita, Chapter 2, Verse 47"
-        },
-        {
-            text: "नैनं छिन्दन्ति शस्त्राणि नैनं दहति पावकः। न चैनं क्लेदयन्त्यापो न शोषयति मारुतः॥",
-            meaning: "The soul cannot be pierced by weapons, nor burned by fire; water cannot wet it, nor can the wind wither it. (A reminder of courage and the eternal self).",
-            source: "Bhagavad Gita, Chapter 2, Verse 23"
-        },
-        {
-            text: "युक्ताहारविहारस्य युक्तचेष्टस्य कर्मसु। युक्तस्वप्नबोधस्य योगो भवति दुःखहा॥",
-            meaning: "Yoga (disciplined practice) is the destroyer of sorrow for one who is moderate in eating and recreation, who is regulated in their actions, and who is balanced in sleep and wakefulness.",
-            source: "Bhagavad Gita, Chapter 6, Verse 17"
-        },
-        {
-            text: "तस्माद्सक्तः सततं कार्यं कर्म समाचर। असक्तो ह्याचरन्कर्म परमाप्नोति पूरुषः॥",
-            meaning: "Therefore, without attachment, constantly perform your duty, for by doing work without attachment, one attains the Supreme.",
-            source: "Bhagavad Gita, Chapter 3, Verse 19"
-        },
-        {
-            text: "यतो धर्मस्ततो जयः।",
-            meaning: "Where there is righteousness, there is victory.",
-            source: "Bhagavad Gita, often quoted as the theme of the Mahabharata"
-        }
-    ];
-
-    let dailyShloka = bhagavadGitaQuotes[Math.floor(new Date().getDate() % bhagavadGitaQuotes.length)];
-     
-    const workoutPlanTemplate = {
-        "Sunday": { title: "Active Recovery", tasks: ["30-40 min brisk walk or yoga"] },
-        "Monday": { title: "Endurance Running", tasks: ["5 min warm-up", "2km jogging", "Fat loss exercises"] },
-        "Tuesday": { title: "Bodyweight Strength", tasks: ["5 min light jogging", "3x max push-ups", "3x20 squats", "3x60s plank", "3x20 crunches"] },
-        "Wednesday": { title: "Active Recovery", tasks: ["30-40 min brisk walk or yoga"] },
-        "Thursday": { title: "Interval & Speed", tasks: ["5 min warm-up", "8-10x 30s sprints with 90s rest", "Agility drills"] },
-        "Friday": { title: "Full Body Strength", tasks: ["5 min light jogging", "Repeat Tuesday's circuit, add reps"] },
-        "Saturday": { title: "Long Endurance", tasks: ["5 min warm-up", "Longer run or ruck march"] }
-    };
-
-    const chartColors = {
-        running: '#5A67D8',
-        runningTime: '#F6AD55',
-        completed: '#38A169',
-        todo: '#A0AEC0',
-        todoCompleted: '#4A5568'
-    };
-
-    /**
-     * Updates all dynamic parts of the UI based on the selected date and data.
-     */
-    function updateUI() {
-        const dateStr = selectedDate.toISOString().split('T')[0];
-        const currentData = allData[dateStr] || {};
-         
-        // Update running data list
-        const runningDataListEl = document.getElementById('running-data-list');
-        if (runningDataListEl) {
-            let runList = currentData?.runList;
-            if (runList && typeof runList === 'string') {
-                runList = JSON.parse(runList);
-            } else if (!runList) {
-                runList = [];
-            }
-
-            runningDataListEl.innerHTML = runList.map(run => {
-                const isCompleted = run.completed || false;
-                return `
-                    <li class="flex items-center justify-between space-x-2 p-2 bg-white rounded-lg shadow-sm">
-                        <div class="flex items-center space-x-2">
-                            <input type="checkbox" id="run-task-${run.id}" class="form-checkbox h-5 w-5 text-green-600 rounded" ${isCompleted ? 'checked' : ''} onchange="updateRunStatus('${run.id}', this.checked)">
-                            <label for="run-task-${run.id}" class="${isCompleted ? 'line-through text-gray-500' : 'text-gray-800'}">Distance: ${run.distance} km, Time: ${run.time} min</label>
-                        </div>
-                        <button onclick="deleteRunData('${run.id}')" class="p-1 rounded-full text-red-500 hover:bg-red-100 transition">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                                <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
-                            </svg>
-                        </button>
-                    </li>
-                `;
-            }).join('');
-        }
-         
-        // Update physical tasks list
-        const physicalTaskListEl = document.getElementById('physical-task-list');
-        if (physicalTaskListEl) {
-            let physicalTasks = currentData?.physicalTasks;
-            if (physicalTasks && typeof physicalTasks === 'string') {
-                physicalTasks = JSON.parse(physicalTasks);
-            } else if (!physicalTasks) {
-                physicalTasks = [];
-            }
-            let physicalTasksHtml = physicalTasks.map((task) => {
-                const isCompleted = task.completed || false;
-                return `
-                    <li class="flex items-center justify-between space-x-2">
-                        <div class="flex items-center space-x-2">
-                            <input type="checkbox" id="physical-task-${task.id}" class="form-checkbox h-5 w-5 text-green-600 rounded" ${isCompleted ? 'checked' : ''} onchange="updatePhysicalTaskStatus('${task.id}', this.checked)">
-                            <label for="physical-task-${task.id}" class="${isCompleted ? 'line-through text-gray-500' : 'text-gray-800'}">${task.text}</label>
-                        </div>
-                        <button onclick="deletePhysicalTask('${task.id}')" class="p-1 rounded-full text-red-500 hover:bg-red-100 transition">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                                <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
-                            </svg>
-                        </button>
-                    </li>
-                `;
-            }).join('');
-             
-            physicalTaskListEl.innerHTML = physicalTasksHtml;
-        }
-         
-        // Update to-do list
-        const todayTodoEl = document.getElementById('today-todo-list');
-        if (todayTodoEl) {
-            let todoList = currentData?.todoList;
-            if (todoList && typeof todoList === 'string') {
-                todoList = JSON.parse(todoList);
-            } else if (!todoList) {
-                todoList = [];
-            }
-            todayTodoEl.innerHTML = todoList.map((todo) => {
-                const isCompleted = todo.completed || false;
-                return `
-                    <li class="flex items-center justify-between space-x-2">
-                        <div class="flex items-center space-x-2">
-                            <input type="checkbox" id="todo-task-${todo.id}" class="form-checkbox h-5 w-5 text-green-600 rounded" ${isCompleted ? 'checked' : ''} onchange="updateTodoStatus('${todo.id}', this.checked)">
-                            <label for="todo-task-${todo.id}" class="${isCompleted ? 'line-through text-gray-500' : 'text-gray-800'}">${todo.text}</label>
-                        </div>
-                        <button onclick="deleteTodoItem('${todo.id}')" class="p-1 rounded-full text-red-500 hover:bg-red-100 transition">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                                <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
-                            </svg>
-                        </button>
-                    </li>
-                `;
-            }).join('');
-        }
-        
-        displayJournal();
-    }
-
-    /**
-     * Updates the charts with the latest data.
-     */
-    function updateCharts() {
-        if (Object.keys(allData).length === 0) {
-            if (runningChart) runningChart.destroy();
-            if (todoChart) todoChart.destroy();
-            runningChart = null;
-            todoChart = null;
-            return;
-        }
-        const today = new Date();
-        const dateFrom = new Date(today.getTime() - (daysToFetchForCharts * 24 * 60 * 60 * 1000));
-
-        const runningTotals = {};
-        const runningTimeTotals = {};
-        const totalTodoTotals = {};
-        const completedTodoTotals = {};
-         
-        Object.keys(allData).forEach(dateStr => {
-            const docDate = new Date(dateStr);
-            if (docDate >= dateFrom) {
-                const week = Math.floor((docDate.getTime() - dateFrom.getTime()) / (7 * 24 * 60 * 60 * 1000));
-                const weekKey = `Week ${week + 1}`;
-                const dailyData = allData[dateStr];
-
-                if (!runningTotals[weekKey]) runningTotals[weekKey] = 0;
-                if (!runningTimeTotals[weekKey]) runningTimeTotals[weekKey] = 0;
-                if (!totalTodoTotals[weekKey]) totalTodoTotals[weekKey] = 0;
-                if (!completedTodoTotals[weekKey]) completedTodoTotals[weekKey] = 0;
-
-                // Sum up completed runs for the charts
-                if (dailyData.runList) {
-                    const runList = typeof dailyData.runList === 'string' ? JSON.parse(dailyData.runList) : dailyData.runList;
-                    runList.forEach(run => {
-                        if (run.completed) {
-                            runningTotals[weekKey] += run.distance;
-                            runningTimeTotals[weekKey] += run.time;
-                        }
-                    });
-                }
-                
-                if(dailyData.todoList) {
-                    const todoList = typeof dailyData.todoList === 'string' ? JSON.parse(dailyData.todoList) : dailyData.todoList;
-                    totalTodoTotals[weekKey] += todoList.length;
-                    const completedTodos = todoList.filter(todo => todo.completed).length;
-                    completedTodoTotals[weekKey] += completedTodos;
-                }
-            }
-        });
-
-        const weeks = Array.from({ length: daysToFetchForCharts / 7 }, (_, i) => `Week ${i + 1}`);
-        const runningData = weeks.map(week => runningTotals[week] || 0);
-        const runningTimeData = weeks.map(week => runningTimeTotals[week] || 0);
-        const totalTodoData = weeks.map(week => totalTodoTotals[week] || 0);
-        const completedTodoData = weeks.map(week => completedTodoTotals[week] || 0);
-
-        const runningChartData = {
-            labels: weeks,
-            datasets: [
-                {
-                    label: 'Total Distance (km)',
-                    data: runningData,
-                    borderColor: chartColors.running,
-                    backgroundColor: 'rgba(90, 103, 216, 0.2)',
-                    fill: false, tension: 0.4
-                },
-                {
-                    label: 'Total Time (min)',
-                    data: runningTimeData,
-                    borderColor: chartColors.runningTime,
-                    backgroundColor: 'rgba(246, 173, 85, 0.2)',
-                    fill: false, tension: 0.4,
-                    yAxisID: 'y1'
-                }
-            ]
-        };
-         
-        const todoChartData = {
-            labels: weeks,
-            datasets: [{
-                label: 'Total To-Do Tasks',
-                data: totalTodoData,
-                backgroundColor: chartColors.todo
-            },
-            {
-                label: 'Completed To-Do Tasks',
-                data: completedTodoData,
-                backgroundColor: chartColors.todoCompleted
-            }]
-        };
-
-        const runningChartEl = document.getElementById('runningChart');
-        if (runningChart) runningChart.destroy();
-        if (runningChartEl) {
-            runningChart = new Chart(runningChartEl.getContext('2d'), {
-                type: 'line',
-                data: runningChartData,
-                options: { 
-                    responsive: true, 
-                    maintainAspectRatio: false, 
-                    interaction: { mode: 'index', intersect: false },
-                    scales: { 
-                        y: { 
-                            beginAtZero: true, 
-                            title: { display: true, text: 'Distance (km)' },
-                            position: 'left'
-                        },
-                        y1: {
-                            beginAtZero: true,
-                            title: { display: true, text: 'Time (min)' },
-                            position: 'right',
-                            grid: { drawOnChartArea: false }
-                        }
-                    } 
-                } 
-            });
-        }
-
-        const todoChartEl = document.getElementById('todoChart');
-        if (todoChart) todoChart.destroy();
-        if (todoChartEl) {
-            todoChart = new Chart(todoChartEl.getContext('2d'), {
-                type: 'bar',
-                data: todoChartData,
-                options: { 
-                    responsive: true, 
-                    maintainAspectRatio: false, 
-                    scales: { 
-                        x: { stacked: true },
-                        y: { 
-                            stacked: true, 
-                            beginAtZero: true, 
-                            title: { display: true, text: 'Tasks' } 
-                        } 
-                    } 
-                } 
-            });
-        }
-    }
-     
-    /**
-     * Sends data to the backend API to save or update daily data.
-     * @param {string} date - The date string (YYYY-MM-DD).
-     * @param {object} data - An object containing the data to update.
-     */
-    async function saveData(date, data) {
-        try {
-            const response = await fetch('/api/save_daily_data', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ date, updates: data })
-            });
-            const result = await response.json();
-            if (!result.success) {
-                console.error("Failed to save data:", result.error);
-            } else {
-                const dateStr = selectedDate.toISOString().split('T')[0];
-                allData[dateStr] = { ...allData[dateStr], ...data };
-                updateUI();
-                updateCharts();
-            }
-        } catch (error) {
-            console.error("Error saving data:", error);
-        }
-    }
-    
-    /**
-     * Adds a new manual run to the current day's list.
-     */
-    async function addManualRun() {
-        const runDistanceInput = document.getElementById('manual-run-input');
-        const runTimeInput = document.getElementById('manual-time-input');
-        const distance = parseFloat(runDistanceInput?.value);
-        const time = parseInt(runTimeInput?.value);
-
-        if (isNaN(distance) || isNaN(time) || distance <= 0 || time <= 0) {
-            console.warn("Please enter valid distance and time values.");
-            return;
-        }
-
-        const dateStr = selectedDate.toISOString().split('T')[0];
-        let currentData = allData[dateStr] || {};
-        let runList = currentData.runList || [];
-        if (typeof runList === 'string') {
-            runList = JSON.parse(runList);
-        }
-         
-        runList.push({ id: Date.now(), distance, time, completed: false });
-        await saveData(dateStr, { runList: runList });
-
-        if (runDistanceInput) runDistanceInput.value = '';
-        if (runTimeInput) runTimeInput.value = '';
-    }
-
-    /**
-     * Updates the completion status of a specific run and updates the chart.
-     * @param {number} runId - The unique ID of the run.
-     * @param {boolean} isCompleted - The new completion status.
-     */
-    async function updateRunStatus(runId, isCompleted) {
-        const dateStr = selectedDate.toISOString().split('T')[0];
-        let currentData = allData[dateStr] || {};
-        let runList = currentData.runList || [];
-        if (typeof runList === 'string') {
-            runList = JSON.parse(runList);
-        }
-        const runIndex = runList.findIndex(run => run.id == runId);
-        if (runIndex > -1) {
-            runList[runIndex].completed = isCompleted;
-            await saveData(dateStr, { runList: runList });
-        }
-    }
-    
-    /**
-     * Deletes a run from the list.
-     * @param {number} runId - The unique ID of the run to delete.
-     */
-    async function deleteRunData(runId) {
-        const dateStr = selectedDate.toISOString().split('T')[0];
-        let currentData = allData[dateStr] || {};
-        let runList = currentData.runList || [];
-        if (typeof runList === 'string') {
-            runList = JSON.parse(runList);
-        }
-        runList = runList.filter(run => run.id != runId);
-        await saveData(dateStr, { runList: runList });
-    }
-     
-    /**
-     * Adds a new physical task.
-     */
-    async function addPhysicalTask() {
-        const physicalTaskInput = document.getElementById('new-physical-task-input');
-        const physicalTaskText = physicalTaskInput?.value?.trim();
-        if (!physicalTaskText) return;
-
-        const dateStr = selectedDate.toISOString().split('T')[0];
-        let currentData = allData[dateStr] || {};
-        let physicalTasks = currentData.physicalTasks || [];
-        if (typeof physicalTasks === 'string') {
-            physicalTasks = JSON.parse(physicalTasks);
-        }
-         
-        physicalTasks.push({ id: Date.now(), text: physicalTaskText, completed: false });
-        await saveData(dateStr, { physicalTasks: physicalTasks });
-        if (physicalTaskInput) physicalTaskInput.value = '';
-    }
-     
-    /**
-     * Updates the completion status of a physical task.
-     * @param {number} taskId - The ID of the task.
-     * @param {boolean} isCompleted - The new completion status.
-     */
-    async function updatePhysicalTaskStatus(taskId, isCompleted) {
-        const dateStr = selectedDate.toISOString().split('T')[0];
-        let currentData = allData[dateStr] || {};
-        let physicalTasks = currentData.physicalTasks || [];
-        if (typeof physicalTasks === 'string') {
-            physicalTasks = JSON.parse(physicalTasks);
-        }
-        const taskIndex = physicalTasks.findIndex(task => task.id == taskId);
-        if (taskIndex > -1) {
-            physicalTasks[taskIndex].completed = isCompleted;
-            await saveData(dateStr, { physicalTasks: physicalTasks });
-        }
-    }
-
-    /**
-     * Deletes a physical task.
-     * @param {number} taskId - The ID of the task to delete.
-     */
-    async function deletePhysicalTask(taskId) {
-        const dateStr = selectedDate.toISOString().split('T')[0];
-        let currentData = allData[dateStr] || {};
-        let physicalTasks = currentData.physicalTasks || [];
-        if (typeof physicalTasks === 'string') {
-            physicalTasks = JSON.parse(physicalTasks);
-        }
-        physicalTasks = physicalTasks.filter(task => task.id != taskId);
-        await saveData(dateStr, { physicalTasks: physicalTasks });
-    }
-     
-    /**
-     * Updates the completion status of a to-do item.
-     * @param {number} todoId - The ID of the to-do item.
-     * @param {boolean} isCompleted - The new completion status.
-     */
-    async function updateTodoStatus(todoId, isCompleted) {
-        const dateStr = selectedDate.toISOString().split('T')[0];
-        let currentData = allData[dateStr] || {};
-        let todoList = currentData.todoList || [];
-        if (typeof todoList === 'string') {
-            todoList = JSON.parse(todoList);
-        }
-        const todoIndex = todoList.findIndex(todo => todo.id == todoId);
-        if (todoIndex > -1) {
-            todoList[todoIndex].completed = isCompleted;
-            await saveData(dateStr, { todoList: todoList });
-        }
-    }
-
-    /**
-     * Adds a new to-do item.
-     */
-    async function addTodoItem() {
-        const todoInput = document.getElementById('new-todo-input');
-        const todoText = todoInput?.value?.trim();
-        if (!todoText) return;
-
-        const dateStr = selectedDate.toISOString().split('T')[0];
-        let currentData = allData[dateStr] || {};
-        let todoList = currentData.todoList || [];
-        if (typeof todoList === 'string') {
-            todoList = JSON.parse(todoList);
-        }
-         
-        todoList.push({ id: Date.now(), text: todoText, completed: false });
-        await saveData(dateStr, { todoList: todoList });
-        if (todoInput) todoInput.value = '';
-    }
-
-    /**
-     * Deletes a to-do item.
-     * @param {number} todoId - The ID of the to-do item to delete.
-     */
-    async function deleteTodoItem(todoId) {
-        const dateStr = selectedDate.toISOString().split('T')[0];
-        let currentData = allData[dateStr] || {};
-        let todoList = currentData.todoList || [];
-        if (typeof todoList === 'string') {
-            todoList = JSON.parse(todoList);
-        }
-        todoList = todoList.filter(todo => todo.id != todoId);
-        await saveData(dateStr, { todoList: todoList });
-    }
-
-    /**
-     * Sets or updates the long-term goal.
-     */
-    async function setLongTermGoal() {
-        const goalInput = document.getElementById('goal-input');
-        const deadlineInput = document.getElementById('goal-deadline-input');
-        const goalText = goalInput?.value?.trim();
-        const goalDeadline = deadlineInput?.value;
-
-        if (!goalText) return;
-
-        try {
-            const response = await fetch('/api/set_goal', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ goal: goalText, deadline: goalDeadline })
-            });
-            const result = await response.json();
-            if (result.success) {
-                location.reload();
-            } else {
-                console.error("Failed to set goal:", result.error);
-            }
-        } catch (error) {
-            console.error("Error setting goal:", error);
-        }
-    }
-
-    /**
-     * Switches the UI to allow editing of the long-term goal.
-     */
-    function modifyGoal() {
-        const goalInputContainer = document.getElementById('goal-input-container');
-        const goalDisplayContainer = document.getElementById('goal-display-container');
-        const goalInput = document.getElementById('goal-input');
-        const deadlineInput = document.getElementById('goal-deadline-input');
-        const currentGoal = document.getElementById('goal-display').textContent;
-        const currentDeadline = userProfile.deadline;
-
-        if (goalInput && currentGoal) {
-            goalInput.value = currentGoal;
-        }
-        if (deadlineInput && currentDeadline) {
-            deadlineInput.value = currentDeadline;
-        }
-        if (goalInputContainer) {
-            goalInputContainer.classList.remove('hidden');
-        }
-        if (goalDisplayContainer) {
-            goalDisplayContainer.classList.add('hidden');
-        }
-    }
-
-    /**
-     * Shows the confirmation modal for deleting the goal.
-     */
-    function deleteGoal() {
-        const modal = document.getElementById('delete-goal-modal');
-        if (modal) {
-            modal.classList.remove('hidden');
-        }
-    }
-
-    /**
-     * Handles the confirmation of deleting the goal.
-     * @param {boolean} isConfirmed - True if the user confirmed, false otherwise.
-     */
-    async function confirmDeleteGoal(isConfirmed) {
-        const modal = document.getElementById('delete-goal-modal');
-        if (modal) {
-            modal.classList.add('hidden');
-        }
-
-        if (isConfirmed) {
-            try {
-                const response = await fetch('/api/delete_goal', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                });
-                const result = await response.json();
-                if (result.success) {
-                    location.reload();
-                } else {
-                    console.error("Failed to delete goal:", result.error);
-                }
-            } catch (error) {
-                console.error("Error deleting goal:", error);
-            }
-        }
-    }
-
-    /**
-     * Sets up the calendar and updates the UI for the selected day.
-     */
-    function setupCalendar() {
-        const calendarEl = document.getElementById('calendar-days');
-        const dateHeaderEl = document.getElementById('current-date');
-        if (!calendarEl || !dateHeaderEl) return;
-         
-        const today = new Date();
-        const startOfMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
-        const endOfMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0);
-        dateHeaderEl.textContent = selectedDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-         
-        calendarEl.innerHTML = `
-            <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
-        `;
-        const firstDayOfWeek = startOfMonth.getDay();
-        const daysInMonth = endOfMonth.getDate();
-
-        for (let i = 0; i < firstDayOfWeek; i++) {
-            const emptyDay = document.createElement('div');
-            calendarEl.appendChild(emptyDay);
-        }
-
-        for (let i = 1; i <= daysInMonth; i++) {
-            const dayEl = document.createElement('div');
-            dayEl.textContent = i;
-            dayEl.className = 'day';
-            const currentDay = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), i);
-             
-            if (currentDay > today) {
-                dayEl.classList.add('disabled');
-            } else {
-                dayEl.classList.add('cursor-pointer', 'hover:bg-slate-200');
-                dayEl.addEventListener('click', () => {
-                    selectedDate = currentDay;
-                    setupCalendar();
-                    updateUI();
-                });
-            }
-
-            if (currentDay.toDateString() === today.toDateString()) {
-                dayEl.classList.add('today');
-            }
-            if (currentDay.toDateString() === selectedDate.toDateString()) {
-                dayEl.classList.add('selected');
-            }
-            
-            calendarEl.appendChild(dayEl);
-        }
-    }
-     
-    /**
-     * Changes the month in the calendar view.
-     * @param {number} direction - -1 for previous month, 1 for next month.
-     */
-    function changeMonth(direction) {
-        selectedDate.setMonth(selectedDate.getMonth() + direction);
-        setupCalendar();
-        updateUI();
-    }
-
-    /**
-     * Displays a daily Bhagavad Gita quote.
-     */
-    function displayDailyQuote() {
-        const today = new Date();
-        const startOfYear = new Date(today.getFullYear(), 0, 0);
-        const diff = today - startOfYear;
-        const oneDay = 1000 * 60 * 60 * 24;
-        const dayOfYear = Math.floor(diff / oneDay);
-        const quoteIndex = dayOfYear % bhagavadGitaQuotes.length;
-        const quote = bhagavadGitaQuotes[quoteIndex];
-        
-        const quoteEl = document.getElementById('daily-gita-quote');
-        if(quoteEl) {
-            quoteEl.innerHTML = `
-                <p class="text-lg italic text-gray-800 mb-4">"${quote.text}"</p>
-                <p class="text-sm text-gray-600">"${quote.meaning}"</p>
-                <p class="text-xs text-right text-gray-400 mt-2">— ${quote.source}</p>
-            `;
-        }
-    }
-
-    /**
-     * Shows the journal modal, pre-populating it if an entry exists for the selected date.
-     */
-    function showJournalModal() {
-        const modal = document.getElementById('journal-modal');
-        const journalTextarea = document.getElementById('journal-entry-textarea');
-        const journalDateTitle = document.getElementById('journal-date-title');
-        
-        const dateStr = selectedDate.toISOString().split('T')[0];
-        const currentData = allData[dateStr] || {};
-
-        if (journalTextarea) {
-            journalTextarea.value = currentData.journalEntry ? currentData.journalEntry : '';
-        }
-        if (journalDateTitle) {
-            journalDateTitle.textContent = `Journal Entry for ${selectedDate.toDateString()}`;
-        }
-        if (modal) {
-            modal.classList.remove('hidden');
-        }
-    }
-    
-    /**
-     * Opens the journal modal to edit the current entry.
-     */
-    function editJournal() {
-        showJournalModal();
-    }
-
-    /**
-     * Closes the journal modal.
-     */
-    function closeJournalModal() {
-        const modal = document.getElementById('journal-modal');
-        if (modal) {
-            modal.classList.add('hidden');
-        }
-    }
-
-    /**
-     * Saves the journal entry via the API.
-     */
-    async function saveJournal() {
-        const dateStr = selectedDate.toISOString().split('T')[0];
-        const journalTextarea = document.getElementById('journal-entry-textarea');
-        const journalEntry = journalTextarea?.value;
-        if (journalEntry !== undefined) {
-            try {
-                const response = await fetch('/api/save_journal', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ date: dateStr, journalEntry: journalEntry })
-                });
-                const result = await response.json();
-                if (result.success) {
-                    allData[dateStr] = { ...allData[dateStr], journalEntry: journalEntry };
-                    closeJournalModal();
-                    displayJournal();
-                } else {
-                    console.error("Failed to save journal:", result.error);
-                }
-            } catch (error) {
-                console.error("Error saving journal:", error);
-            }
-        }
-    }
-    
-    /**
-     * Renders the journal entry on the main page.
-     */
-    function displayJournal() {
-        const journalDisplaySection = document.getElementById('daily-journal-section');
-        const journalTextEl = document.getElementById('journal-text');
-        const dateStr = selectedDate.toISOString().split('T')[0];
-        const currentData = allData[dateStr] || {};
-
-        if (currentData.journalEntry) {
-            journalTextEl.textContent = currentData.journalEntry;
-            if (journalDisplaySection) journalDisplaySection.classList.remove('hidden');
-        } else {
-            if (journalDisplaySection) journalDisplaySection.classList.add('hidden');
-        }
-    }
-
-    /**
-     * Shows the confirmation modal for deleting a journal entry.
-     */
-    function deleteJournal() {
-        const modal = document.getElementById('delete-journal-modal');
-        if (modal) {
-            modal.classList.remove('hidden');
-        }
-    }
-    
-    /**
-     * Handles the confirmation of deleting a journal entry.
-     * @param {boolean} isConfirmed - True if the user confirmed, false otherwise.
-     */
-    async function confirmDeleteJournal(isConfirmed) {
-        const modal = document.getElementById('delete-journal-modal');
-        if (modal) {
-            modal.classList.add('hidden');
-        }
-
-        if (isConfirmed) {
-            const dateStr = selectedDate.toISOString().split('T')[0];
-            try {
-                const response = await fetch('/api/save_journal', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ date: dateStr, journalEntry: null })
-                });
-                const result = await response.json();
-                if (result.success) {
-                    allData[dateStr] = { ...allData[dateStr], journalEntry: null };
-                    displayJournal();
-                } else {
-                    console.error("Failed to delete journal:", result.error);
-                }
-            } catch (error) {
-                console.error("Error deleting journal:", error);
-            }
-        }
-    }
-
-    /**
-     * Initializes the application on page load.
-     */
-    async function init() {
-        setupCalendar();
-        updateUI();
-        updateCharts();
-        displayDailyQuote();
-        
-        window.addEventListener('resize', () => {
-            if (runningChart) runningChart.resize();
-            if (todoChart) todoChart.resize();
-        });
-    
-        const goalDisplayContainer = document.getElementById('goal-display-container');
-        const goalInputContainer = document.getElementById('goal-input-container');
-        const goalActions = document.getElementById('goal-actions');
-        
-        if (userProfile.goal) {
-            if (goalDisplayContainer) goalDisplayContainer.classList.remove('hidden');
-            if (goalInputContainer) goalInputContainer.classList.add('hidden');
-            if (goalActions) goalActions.classList.remove('hidden');
-        } else {
-            if (goalDisplayContainer) goalDisplayContainer.classList.add('hidden');
-            if (goalInputContainer) goalInputContainer.classList.remove('hidden');
-            if (goalActions) goalActions.classList.add('hidden');
-        }
-
-        const goalDisplayEl = document.getElementById('goal-display');
-        const deadlineDisplayEl = document.getElementById('goal-deadline-display');
-        const streakCounterEl = document.getElementById('streak-counter');
-        
-        if (goalDisplayEl) {
-            goalDisplayEl.textContent = userProfile.goal || "No long-term goal set yet.";
-        }
-        if (deadlineDisplayEl) {
-            deadlineDisplayEl.textContent = userProfile.deadline ? `(Deadline: ${new Date(userProfile.deadline).toDateString()})` : '';
-            deadlineDisplayEl.dataset.deadline = userProfile.deadline || '';
-        }
-        if (streakCounterEl) {
-            streakCounterEl.textContent = `${userProfile.currentStreak || 0} days`;
-        }
-
-        selectedDate = new Date();
-        setupCalendar();
-        updateUI();
-    }
-
-    document.addEventListener('DOMContentLoaded', init);
-</script>
 </html>
