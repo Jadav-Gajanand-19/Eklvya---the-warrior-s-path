@@ -149,7 +149,7 @@
                         <li class="flex items-center justify-between space-x-2 p-2 bg-white rounded-lg shadow-sm">
                             <div class="flex items-center space-x-2">
                                 <input type="checkbox" id="run-task-${run.id}" class="form-checkbox h-5 w-5 text-green-600 rounded" ${isCompleted ? 'checked' : ''} onchange="updateRunStatus('${run.id}', this.checked)">
-                                <label for="run-task-${run.id}" class="${isCompleted ? 'line-through text-gray-500' : 'text-gray-800'}">Distance: ${run.distance} km, Time: ${run.time} min</label>
+                                <label for="run-task-${run.id}" class="${isCompleted ? 'line-through text-gray-500' : 'text-gray-800'}">Distance: ${run.distance} km, Time: ${run.minutes || 0} min ${run.seconds || 0} sec</label>
                             </div>
                             <button onclick="deleteRunData('${run.id}')" class="p-1 rounded-full text-red-500 hover:bg-red-100 transition">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -206,7 +206,7 @@
             }
             
             displayJournal();
-            displayNote(); // Call displayNote here
+            displayNote();
         }
         
         function updateUserProfileUI() {
@@ -271,7 +271,8 @@
                     runList.forEach(run => {
                         if (run.completed) {
                             runningTotals[weekKey] += run.distance;
-                            runningTimeTotals[weekKey] += run.time;
+                            // Convert total time to minutes for charting
+                            runningTimeTotals[weekKey] += (run.minutes || 0) + (run.seconds || 0) / 60;
                         }
                     });
                     
@@ -378,7 +379,8 @@
                 await setPersistence(auth, rememberMe ? browserLocalPersistence : browserSessionPersistence);
                 await signInWithEmailAndPassword(auth, email, password);
                 showMessage("Login successful!");
-            } catch (error) {
+            }
+            catch (error) {
                 showMessage(`Login failed: ${error.message}`);
             }
         }
@@ -481,12 +483,24 @@
         async function addManualRun() {
             if (!userId) return;
             const runDistanceInput = document.getElementById('manual-run-input');
-            const runTimeInput = document.getElementById('manual-time-input');
-            const distance = parseFloat(runDistanceInput?.value);
-            const time = parseInt(runTimeInput?.value);
+            const runMinutesInput = document.getElementById('manual-minutes-input'); // New ID
+            const runSecondsInput = document.getElementById('manual-seconds-input'); // New ID
 
-            if (isNaN(distance) || isNaN(time) || distance <= 0 || time <= 0) {
+            const distance = parseFloat(runDistanceInput?.value);
+            const minutes = parseInt(runMinutesInput?.value);
+            const seconds = parseInt(runSecondsInput?.value);
+
+            if (isNaN(distance) || distance <= 0 || (isNaN(minutes) && isNaN(seconds))) {
                 showMessage("Please enter valid distance and time values.");
+                return;
+            }
+
+            // Ensure minutes and seconds are treated as 0 if empty
+            const actualMinutes = isNaN(minutes) ? 0 : minutes;
+            const actualSeconds = isNaN(seconds) ? 0 : seconds;
+
+            if (actualMinutes === 0 && actualSeconds === 0 && distance === 0) {
+                showMessage("Please enter meaningful values for distance or time.");
                 return;
             }
 
@@ -494,10 +508,11 @@
             const currentData = allData[dateStr] || {};
             const runList = currentData.runList || [];
             
-            runList.push({ id: Date.now(), distance, time, completed: false });
+            runList.push({ id: Date.now(), distance, minutes: actualMinutes, seconds: actualSeconds, completed: false }); // Store minutes and seconds
             await saveData(dateStr, { runList });
             runDistanceInput.value = '';
-            runTimeInput.value = '';
+            runMinutesInput.value = ''; // Clear new input
+            runSecondsInput.value = ''; // Clear new input
         }
 
         async function updateRunStatus(runId, isCompleted) {
@@ -719,12 +734,12 @@
             window.saveJournal = saveJournal;
             window.deleteJournal = deleteJournal;
             window.confirmDeleteJournal = confirmDeleteJournal;
-            window.showNotesModal = showNotesModal; // New
-            window.editNote = editNote;             // New
-            window.closeNotesModal = closeNotesModal; // New
-            window.saveNote = saveNote;             // New
-            window.deleteNote = deleteNote;         // New
-            window.confirmDeleteNote = confirmDeleteNote; // New
+            window.showNotesModal = showNotesModal;
+            window.editNote = editNote;
+            window.closeNotesModal = closeNotesModal;
+            window.saveNote = saveNote;
+            window.deleteNote = deleteNote;
+            window.confirmDeleteNote = confirmDeleteNote;
             window.changeMonth = changeMonth;
         }
 
@@ -771,7 +786,7 @@
             left: 50%;
             transform: translate(-50%, -50%);
         }
-        .shloka-popup, .confirmation-modal, .journal-modal, .notes-modal { /* Added .notes-modal */
+        .shloka-popup, .confirmation-modal, .journal-modal, .notes-modal {
             position: fixed;
             top: 0;
             left: 0;
@@ -806,6 +821,10 @@
         .day.disabled {
             color: #a0aec0;
             cursor: not-allowed;
+        }
+        /* Style for pre-wrap text to preserve formatting */
+        .journal-text-display, .note-text-display {
+            white-space: pre-wrap;
         }
     </style>
 </head>
@@ -901,9 +920,10 @@
                         <div id="running-section" class="mb-4">
                             <h3 class="text-xl font-semibold mb-2">Endurance Running</h3>
                             <ul id="running-data-list" class="space-y-2 mb-4"></ul>
-                            <div class="flex flex-col space-y-2 sm:flex-row sm:space-y-0 sm:space-x-2">
-                                <input id="manual-run-input" type="number" step="0.1" placeholder="Distance (km)" class="w-full sm:w-1/2 p-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-green-500 focus:border-green-500">
-                                <input id="manual-time-input" type="number" placeholder="Time (min)" class="w-full sm:w-1/2 p-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-green-500 focus:border-green-500">
+                            <div class="flex flex-col sm:flex-row sm:space-x-2 space-y-2 sm:space-y-0">
+                                <input id="manual-run-input" type="number" step="0.1" placeholder="Distance (km)" class="w-full sm:w-1/3 p-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-green-500 focus:border-green-500">
+                                <input id="manual-minutes-input" type="number" placeholder="Min" class="w-full sm:w-1/3 p-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-green-500 focus:border-green-500">
+                                <input id="manual-seconds-input" type="number" placeholder="Sec" class="w-full sm:w-1/3 p-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-green-500 focus:border-green-500">
                                 <button onclick="addManualRun()" class="flex-grow bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 transition">Add Run</button>
                             </div>
                         </div>
@@ -979,7 +999,7 @@
                     </button>
                 </div>
             </div>
-            <p id="journal-text" class="text-lg text-gray-800"></p>
+            <p id="journal-text" class="text-lg text-gray-800 journal-text-display"></p>
         </section>
 
         <!-- Daily Notes Section -->
@@ -1002,7 +1022,7 @@
                     </button>
                 </div>
             </div>
-            <p id="note-text" class="text-lg text-gray-800"></p>
+            <p id="note-text" class="text-lg text-gray-800 note-text-display"></p>
         </section>
 
         <!-- Daily Inspiration Section -->
